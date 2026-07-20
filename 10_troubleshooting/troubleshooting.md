@@ -17,7 +17,7 @@ mp.set_sharing_strategy("file_system")
 
 **症状：** `import isaaclab` 失败，或各种 API 找不到。
 
-**解决：** 确认 Isaac Lab 版本 >= 2.3
+**解决：** 确认 Isaac Lab 版本 >= 2.3 and < 3.0
 
 ```bash
 python -c "import isaaclab; print(isaaclab.__version__)"

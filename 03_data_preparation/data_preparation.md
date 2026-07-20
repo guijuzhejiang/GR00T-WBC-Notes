@@ -84,11 +84,34 @@ python gear_sonic/data_process/filter_and_copy_bones_data.py \
     └── last.pt
 ```
 
-## SMPL 数据准备（可选但推荐）
+## robot_filtered 与 smpl_filtered 说明
 
-SMPL 编码器提升训练质量，特别是人体姿势的泛化性。如果不用 SMPL，训练可以跑，但效果会差一些。
+训练 SONIC 时需要准备这两类核心运动数据。它们的物理意义和作用如下：
 
-SMPL 数据已经包含在 HuggingFace 上，`download_from_hf.py --training` 会自动下载。
+| 数据类型 | 物理意义 | 作用 | 包含的内容 |
+| :--- | :--- | :--- | :--- |
+| **`robot_filtered`** | **机器人关节空间动捕数据** | 指导机器人在仿真环境中的物理运动参考轨迹，用于训练 WBC 策略的关节执行与控制（Decoder 端）。 | G1 机器人的各个关节角度（29 DOF）、身体根节点（Pelvis）的三维位置和朝向四元数等。 |
+| **`smpl_filtered`** | **参数化人体模型姿态数据** | 用于训练专门的 **SMPL 编码器**（SMPL Encoder），实现人体任意姿势到通用 Token 空间的跨模态映射。 | 人体 SMPL 模型对应的 24 个骨骼关节旋转（以轴角表示）、三维根节点位移等。 |
+
+### 它们是「一一对应」的吗？
+
+**是的一一对应。**
+
+在通用 Token 架构中，系统通过对比学习（Auxiliary Losses）和联合训练，将不同的控制输入（机器人关节、VR 三点追踪、SMPL 人体姿态）投影到同一个共享隐空间中。因此，训练过程中**必须拥有配对（Aligned）的数据**。
+
+- **文件名对齐**：对于 `robot_filtered/` 文件夹下的某一个动作文件（例如 `run_stride_01.pkl`），在 `smpl_filtered/` 文件夹下**必须**存在同名的 `run_stride_01.pkl`。
+- **时间帧对齐**：两者的时间序列长度、时间戳必须精确一致，代表同一个动捕动作在“机器人空间”与“人体空间”的同步映射。
+
+### 加载与匹配机制
+
+代码加载逻辑位于 `gear_sonic/utils/motion_lib/motion_lib_base.py` 中：
+1. 系统首先读取机器人动作目录（`robot_filtered/`），将其所有动作文件名（不含后缀）作为主索引键值列表 `_motion_data_keys`。
+2. 然后，系统遍历每个键值，去 `smpl_motion_file` 指定的目录中寻找同名的 `.pkl` 文件。
+3. 若找到同名文件，则在内存中将其与对应的机器人参考动作绑定；若未找到，该项将被设置为 `None`（此时相关 SMPL 编码器损失无法计算，可能会影响模态对齐泛化效果）。
+
+> [!IMPORTANT]
+> 如果你要使用自定义的动捕动作进行训练，请确保提供配对重定向后的机器人 PKL 以及对应的原版 SMPL 姿态 PKL，且两者的文件名保持完全一致。
+
 
 ## 验证数据
 

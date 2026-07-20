@@ -2,8 +2,9 @@
 
 ## 训练前回放验证
 
-训练前先确认数据质量没问题：
+训练前建议先在仿真器里回放动作数据，确认位置重定向和坐标系转换是否正确。
 
+回放命令示例：
 ```bash
 python gear_sonic/train_agent_trl.py \
     +exp=manager/universal_token/all_modes/sonic_release \
@@ -12,7 +13,22 @@ python gear_sonic/train_agent_trl.py \
     headless=False
 ```
 
-看到仿真里机器人跟着动作数据动，说明数据路径和格式都正常。
+### 命令理解与数据路径说明：
+* **默认数据路径**：该命令中并没有直接通过命令行指定数据路径，这是因为系统会自动去读取实验配置文件 `+exp=...` 中的配置。在此命令中指向的是 `gear_sonic/config/exp/manager/universal_token/all_modes/sonic_release.yaml`，其内部缺省配置了数据目录：
+  - 机器人运动库路径：`motion_file: data/motion_lib_bones_seed/robot_filtered`
+  - 参数化人体运动路径：`smpl_motion_file: data/bones_seed_smpl`
+* **回放自定义数据**：如果是自己新处理好的动作数据，或是存放在非默认路径下的动作数据，可以通过命令行 `++` 语法将其参数覆盖。例如：
+  ```bash
+  python gear_sonic/train_agent_trl.py \
+      +exp=manager/universal_token/all_modes/sonic_release \
+      ++replay=True \
+      num_envs=4 \
+      headless=False \
+      ++manager_env.commands.motion.motion_lib_cfg.motion_file=your/custom/robot_filtered \
+      ++manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=your/custom/smpl_filtered
+  ```
+* **现象说明**：当命令加了 `++replay=True` 后，策略不会更新权重，而是在 Isaac Lab 仿真界面中逐帧地回放上述指定目录中的 PKL 动作数据线索。若看到仿真里的机器人流畅、不摔落且精准地跟着人体的参考动作动，则表示数据质量及前期的动作过滤（`filter_and_copy_bones_data.py`）环节均通过。
+
 
 ## 评估指标（成功率、MPJPE）
 

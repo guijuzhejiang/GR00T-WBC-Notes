@@ -33,7 +33,7 @@ python gear_sonic/train_agent_trl.py \
 
 ### checkpoint 保存策略
 
-默认每 2000 步保存一次，一个 checkpoint 约 4h20m（8 GPU）。`last.pt` 会频繁更新，是最新状态。
+默认每 2000 步保存一次，一个 checkpoint 约 4h20m（1 GPU）。`last.pt` 会频繁更新，是最新状态。
 
 如果担心训练中断丢进度，可以缩短保存间隔：
 ```yaml

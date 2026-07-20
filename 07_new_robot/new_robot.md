@@ -104,26 +104,60 @@ manager_env:
 
 ## Step 5：运动数据
 
-需要把人体动捕数据重定向到你的机器人骨骼。重定向方式：
+接入新机器人时，运动数据分为人类运动数据（`smpl_filtered`）与机器人动作数据（`robot_filtered`）。关于这两部分数据的处理与理解：
 
-1. **SOMA/BVH 重定向**：用专业动捕软件（推荐），输出 CSV，然后走标准转换流程
-2. **手动写映射**：如果关节结构差异大，可能需要写自定义重定向脚本
+### 1. 人类运动数据（`smpl_filtered`）
+* **结论**：**无需修改，可直接复用**。
+* **原因**：SMPL 仅代表标准的参数化人体姿态结构，与具体的机器人几何和自由度（DOF）配置无关。只要您的实验配置文件需要使用 SMPL 辅助训练（例如为了与 VLA 的 SMPL 提取隐空间对齐），直接复用已有的 `data/smpl_filtered/` 里的 PKL 数据即可。
 
-转换成 PKL 后的流程和 G1 完全一样：
-```bash
-# 转换
-python gear_sonic/data_process/convert_soma_csv_to_motion_lib.py \
-    --input /path/to/your_robot/csv/ \
-    --output data/motion_lib_your_robot/robot \
-    --fps 30 --fps_source 120 --individual --num_workers 16
+### 2. 机器人运动数据（`robot_filtered`）
+* **结论**：**不能直接将 `g1` 目录下的原始 CSV 作为输入！**
+* **重要限制说明**：HuggingFace 上的原始数据（如 `bones-studio/seed/g1/csv/`）中存储的已经是**重定向到 Unitree G1 机械结构和 DOF（29自由度）** 后的角度值和位移。不同机器人的关节拓扑（如 H2 只有 19 自由度，且关节限位不同）完全不同。
 
-# 过滤
-python gear_sonic/data_process/filter_and_copy_bones_data.py \
-    --source data/motion_lib_your_robot/robot \
-    --dest data/motion_lib_your_robot/robot_filtered --workers 16
-```
+* **正确的操作链条与重定向实现方法**：
+  我们提供或推荐了以下三种具体的重定向（Retargeting）开源与内置方法来实现从人体动捕数据到新机器人的转换：
 
-SMPL 数据可以复用（可选，但推荐配置上）。
+  - **方法 A：NVIDIA SOMA-Retargeter（官方外部库，推荐）**
+    - **说明**：这是官方将 Bones-SEED 人体动捕标记点转换为 G1 关节数据时所采用的基于优化（Newton 求解器）的重定向系统。
+    - **开源仓库**：[soma-retargeter](https://github.com/NVIDIA/soma-retargeter)
+    - **使用方法**：提供人类 SMPL 姿态节点或动捕 CSV，指定您的新机器人 URDF 模型，它会自动将末端执行器和身体关节做优化匹配计算，并输出可以直接被 `convert_soma_csv_to_motion_lib.py` 识别的各个关节角度序列。
+
+  - **方法 B：内置 naive PyTorch 重定向模块（本地代码）**
+    - **说明**：本项目内部的 `gear_sonic/utils/motion_lib/skeleton.py` 包含了一个简单的纯 PyTorch / Vectorized 重定向实现。
+    - **具体接口**：`SkeletonState.retarget_to()` 和 `SkeletonState.retarget_to_by_tpose()`。
+    - **使用方法**：
+      1. 在 Python 代码中导入并创建源机器人与目标机器人的 `SkeletonTree`（读取各自 MJCF XML）。
+      2. 编写 `joint_mapping: dict[str, str]` 显式建立人体关节名到你机器人关节名的映射对。
+      3. 定义人类与机器人各自的 T-pose 关节旋转矩阵 `source_tpose` 与 `target_tpose`，以及尺度变化系数 `scale_to_target_skeleton`。
+      4. 通过调用 `source_state.retarget_to(joint_mapping, ...)`，可在内存中直接将原始 BVH 动作等速投影计算成机器人局部的关节旋转，最后转成 CSV 格式存储。
+
+  - **方法 C：使用子项目 MotionBricks 重定向与生成系统（本地子目录）**
+    - **说明**：在本项目根目录下的 `motionbricks/` 文件夹拥有完整的运动特征处理与表示逻辑。
+    - **开发指导**：参考目录下的 [adding_your_own_dataset.md](file:///home/zzg/workspace/pycharm/GR00T-WholeBodyControl/motionbricks/docs/adding_your_own_dataset.md) 和 [motion_representation.md](file:///home/zzg/workspace/pycharm/GR00T-WholeBodyControl/motionbricks/docs/motion_representation.md)。
+    - **使用方法**：若您的新机器人结构与 G1 大相径庭，可在 `motionbricks/motionlib/core/motion_reps/` 中重写您的机器人 `MotionRep`，通过其中的 Forward Kinematics 求解特征，并利用 `motionbricks/scripts/train_vqvae.py` 等算法合成参考轨迹。
+
+  1. **第一步（执行上述重定向）**：通过选定的重定向手段，生成您新机器人的关节角度 CSV 数据并保存至新文件夹（例如 `data/bones-studio/seed/your_robot/csv/`）。
+
+  2. **第二步（修改转换脚本）**：在 `gear_sonic/data_process/convert_soma_csv_to_motion_lib.py` 中，针对您新机器人的机械结构，修改以下五个核心常量：
+     - `MJ_TO_IL`：新机器人从 MuJoCo 自由度顺序到 Isaac Lab 自由度顺序的全局映射数组。
+     - `NUM_DOF`：新机器人的总执行自由度（例如 G1 为 29，H2 为 19）。
+     - `NUM_BODIES`：新机器人的全身主要链接（Actuated Links + Pelvis）体数量。
+     - `DOF_AXIS`：每个执行关节在局部坐标下的旋转轴向（`x/y/z` 对应的单位数矩阵）。
+     - `BONES_CSV_JOINT_NAMES`：新机器人的重定向 CSV 首行对应的关节列名称顺序。
+  3. **第三步（执行转换与过滤）**：
+     ```bash
+     # 指向您重定向后新机器人的 CSV 数据源，并生成原始 robot 镜像
+     python gear_sonic/data_process/convert_soma_csv_to_motion_lib.py \
+         --input /path/to/your_robot/csv/ \
+         --output data/motion_lib_your_robot/robot \
+         --fps 30 --fps_source 120 --individual --num_workers 16
+     
+     # 执行过滤逻辑，过滤掉物理越限或违背重心学的动作片段（此脚本基于动作名称关键字，无需改动）
+     python gear_sonic/data_process/filter_and_copy_bones_data.py \
+         --source data/motion_lib_your_robot/robot \
+         --dest data/motion_lib_your_robot/robot_filtered --workers 16
+     ```
+
 
 ## Step 6：实验配置文件
 
